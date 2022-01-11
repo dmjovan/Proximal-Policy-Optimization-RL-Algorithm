@@ -1,5 +1,5 @@
 import argparse
-from ppo import PPOAgent
+from ppo import PPOAgent, available_envs
 
 # definition of parser for cmd line arguments input
 parser = argparse.ArgumentParser(description='Parsing program arguments - algorithm hyper-parameters ...') 
@@ -20,11 +20,21 @@ parser.add_argument('--buffer_size', type=int)
 # main part of program
 if __name__ == "__main__":
 
+    # discrete environments
+    envs = [env for env in available_envs if available_envs[env]['type'] == 'discrete']
+
     # parsing arguments
     args = parser.parse_args()
 
-    # creating agent for Proximal Policy Optimization algorithm
-    ppo = PPOAgent(args, 'CartPole-v0')
+    for env in envs:
+        # creating agent for Proximal Policy Optimization algorithm
+        ppo_agent = PPOAgent(args, env)
 
-    # training agent
-    ppo.train()
+        # training agent
+        ppo_agent.train()
+
+        # deleting agent
+        del ppo_agent
+
+    
+    

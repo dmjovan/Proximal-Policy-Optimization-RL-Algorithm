@@ -4,8 +4,17 @@ from tensorflow import keras
 from tensorflow.keras import layers
 import gym
 import os
+import shutil
 import scipy.signal
 from scipy.signal.filter_design import normalize
+
+available_envs = {
+                  'CartPole-v0': {'type': 'discrete', 'reward_info': 'Reward is 1 for every step taken, including the termination step'},
+                  'MountainCar-v0': {'type': 'discrete', 'reward_info': 'Reward is -1.0 if not terminal state, 0.0 if agent has reached the flag'},
+                  'Acrobot-v1': {'type': 'discrete', 'reward_info': 'Reward is -1.0 if not terminal state, 0.0 if terminal'},
+                  'MountainCarContinuous-v0': {'type': 'continuous', 'reward_info': 'Reward is 100 if agent reached the flag, reward is decreased based on amount of energy consumed each step'},
+                  'Pendulum-v0': {'type': 'continuous', 'reward_info': 'None'}
+                 }
 
 class PPOAgent(object):
 
@@ -42,20 +51,32 @@ class PPOAgent(object):
         self.hidden_units = [64, 64] if args.hidden_units is None else args.hidden_units
         self.buffer_size = self.max_iter if args.buffer_size is None else args.buffer_size
 
-        # creating paths and folders for storing results
-        self.models_path = self.env_name + '\\models'
-        self.results_path = self.env_name + '\\results'
-        os.makedirs(self.models_path)
-        os.makedirs(self.results_path)
+        # checking if envirnoment is supported
+        assert self.env_name in available_envs.keys(), 'Provided environment is not supported!'
+    
+        self.env_type = available_envs[self.env_name]['type']
 
         # creating OpenAi Gym Environment
         self.env = gym.make(self.env_name)
 
         # getting dimensions of state and action spaces
         self.state_space_dims = self.env.observation_space.shape[0]
-        self.action_space_dims = self.env.action_space.n
+        
+        if self.env_type == 'discrete':
+            self.action_space_dims = self.env.action_space.n
 
-        print(self.__repr__())
+        elif self.env_type == 'continuous':
+            pass
+            # TODO add here
+
+        # creating paths and folders for storing results
+        self.models_path = self.env_name + '\\models'
+        self.results_path = self.env_name + '\\results'
+
+        if os.path.exists(self.env_name):
+            shutil.rmtree(self.env_name) 
+            os.makedirs(self.models_path)
+            os.makedirs(self.results_path)
 
         # initialization of all buffers for storing trajectories
         self.state_buffer = np.zeros((self.buffer_size, self.state_space_dims), dtype=np.float32)
@@ -76,6 +97,19 @@ class PPOAgent(object):
         # initialization of Actor and Critic optimizers
         self.actor_optimizer = keras.optimizers.Adam(learning_rate=self.actor_lr)
         self.critic_optimizer = keras.optimizers.Adam(learning_rate=self.critic_lr)
+        
+        print(self.__repr__())
+        
+        # printing Actor model summary
+        print('--------------------------------------------------------------------')
+        self.actor.summary()
+        print('--------------------------------------------------------------------')
+
+        # printing Critic model summary
+        print('--------------------------------------------------------------------')
+        self.critic.summary()
+        print('--------------------------------------------------------------------')
+
 
     def __repr__(self) -> str:
 
@@ -91,7 +125,22 @@ class PPOAgent(object):
 
         rep = '--------------------------------------------------------------------\n'
         rep += '---------------- Proximal Policy Optimization Agent ----------------\n'
+        rep += '********************\n'
+        rep += '********************\n'
         rep += f'OpenAI Gym Environment used: {self.env_name}\n'
+        rep += f'Environment state space size: {self.state_space_dims}\n'
+        rep += f'Environment action space is: {self.env_type}\n'
+
+        if self.env_type == 'discrete':
+            rep += f'Environment number of actions is: {self.action_space_dims}\n'
+
+        elif self.env_type == 'continuous':
+            rep += ''
+            # TODO add here 
+
+        rep += f'Environment reward definition: {available_envs[self.env_name]["reward_info"]}\n'
+        rep += '********************\n'
+        rep += '********************\n'
         rep += f'Number of training episodes: {self.num_episodes}\n'
         rep += f'Maximum iterations over one episode: {self.max_iter}\n'
         rep += f'Discount factor - gamma: {self.gamma}\n'
@@ -132,10 +181,6 @@ class PPOAgent(object):
         
         self.actor = keras.Model(inputs=state_input, outputs=logits_output, name='Actor_Model')
 
-        # printing Actor model summary
-        print('--------------------------------------------------------------------')
-        self.actor.summary()
-        print('--------------------------------------------------------------------')
 
     def create_critic(self) -> None:
 
@@ -160,11 +205,6 @@ class PPOAgent(object):
         value = tf.squeeze(value_output, axis=1)
 
         self.critic = keras.Model(inputs=state_input, outputs=value, name='Critic_Model')
-
-        # printing Critic model summary
-        print('--------------------------------------------------------------------')
-        self.critic.summary()
-        print('--------------------------------------------------------------------')
 
 
     @tf.function
@@ -412,5 +452,7 @@ class PPOAgent(object):
 
             # Print mean return and length for each episode
             print(f"Episode: {episode + 1}. Mean Return: {sum_return / num_episodes}. Mean Length: {sum_length / num_episodes}")
+
+        # TODO - save models, save results
 
 
