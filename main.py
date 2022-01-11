@@ -24,7 +24,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # creating agent for Proximal Policy Optimization algorithm
-    ppo = PPOAgent(args, 'Cartpole-v0')
-    print(ppo)
+    ppo = PPOAgent(args, 'CartPole-v0')
 
+    # training agent
     ppo.train()

@@ -1,11 +1,11 @@
 import numpy as np
-from scipy.signal.filter_design import normalize
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 import gym
+import os
 import scipy.signal
-import time
+from scipy.signal.filter_design import normalize
 
 class PPOAgent(object):
 
@@ -28,7 +28,7 @@ class PPOAgent(object):
         tf.random.set_seed(1)
 
         # defining hyper-parameters
-        self.env_name = args.env_name if _env_name is None else _env_name
+        self.env_name = _env_name if args.env_name is None else args.env_name
         self.num_episodes = 50 if args.num_episodes is None else args.num_episodes
         self.max_iter = 5000 if args.max_iter is None else args.mx_iter
         self.gamma = 0.99 if args.gamma is None else args.gamma
@@ -42,12 +42,20 @@ class PPOAgent(object):
         self.hidden_units = [64, 64] if args.hidden_units is None else args.hidden_units
         self.buffer_size = self.max_iter if args.buffer_size is None else args.buffer_size
 
+        # creating paths and folders for storing results
+        self.models_path = self.env_name + '\\models'
+        self.results_path = self.env_name + '\\results'
+        os.makedirs(self.models_path)
+        os.makedirs(self.results_path)
+
         # creating OpenAi Gym Environment
         self.env = gym.make(self.env_name)
 
         # getting dimensions of state and action spaces
         self.state_space_dims = self.env.observation_space.shape[0]
         self.action_space_dims = self.env.action_space.n
+
+        print(self.__repr__())
 
         # initialization of all buffers for storing trajectories
         self.state_buffer = np.zeros((self.buffer_size, self.state_space_dims), dtype=np.float32)
@@ -94,7 +102,7 @@ class PPOAgent(object):
         rep += f'Number of iterations for updating Critic model: {self.train_critic_iter}\n'
         rep += f'Lambda factor: {self.lambda_}\n'
         rep += f'Target KL value: {self.target_kl}\n'
-        rep += f'Sizes for hidden layers of Actor/Critic models: {self.hidden_sizes}\n'
+        rep += f'Number of units for hidden layers of Actor/Critic models: {self.hidden_units}\n'
         rep += f'Buffer size: {self.buffer_size}\n'
         rep += '--------------------------------------------------------------------'
 
@@ -122,7 +130,7 @@ class PPOAgent(object):
 
         logits_output = layers.Dense(units=self.action_space_dims, activation=None)(x)
         
-        self.actor = keras.Model(inputs=state_input, outputs=logits_output, name='Actor Model')
+        self.actor = keras.Model(inputs=state_input, outputs=logits_output, name='Actor_Model')
 
         # printing Actor model summary
         print('--------------------------------------------------------------------')
@@ -151,7 +159,7 @@ class PPOAgent(object):
         value_output = layers.Dense(units=1, activation=None)(x)
         value = tf.squeeze(value_output, axis=1)
 
-        self.critic = keras.Model(inputs=state_input, outputs=value, name='Critic Model')
+        self.critic = keras.Model(inputs=state_input, outputs=value, name='Critic_Model')
 
         # printing Critic model summary
         print('--------------------------------------------------------------------')
@@ -249,7 +257,7 @@ class PPOAgent(object):
         """
 
         with tf.GradientTape() as tape: 
-            value_loss = tf.reduce_mean((self.return_buffer - self.critic(self.observation_buffer)) ** 2)
+            value_loss = tf.reduce_mean((self.return_buffer - self.critic(self.state_buffer)) ** 2)
         
         value_grads = tape.gradient(value_loss, self.critic.trainable_variables)
 
