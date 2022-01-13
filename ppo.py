@@ -1,10 +1,12 @@
 import numpy as np
+from numpy.lib.npyio import load
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 import gym
 import os
 import shutil
+import matplotlib.pyplot as plt
 import scipy.signal
 from scipy.signal.filter_design import normalize
 
@@ -20,14 +22,15 @@ class PPOAgent(object):
 
     """ Implementation of Proximal Policy Optimization agent from Machine Learning field of Reinforcement Learning """    
 
-    def __init__(self, args: object, _env_name: str=None) -> None:
+    def __init__(self, args: object, _env_name: str=None, load_model: bool=False) -> None:
 
         """ 
             Constructor of the class.
 
             :params:
                 - args: ArgumentParser object 
-                - _env_name: name of default Environment or Environment for for-loop training
+                - _env_name: name of default Environment or Environment for for-loop training inside IDE
+                - load_model: indicator for loading models if exist
 
             :return:
                 - None
@@ -38,8 +41,9 @@ class PPOAgent(object):
 
         # defining hyper-parameters
         self.env_name = _env_name if args.env_name is None else args.env_name
-        self.num_episodes = 50 if args.num_episodes is None else args.num_episodes
+        self.num_episodes = 100 if args.num_episodes is None else args.num_episodes
         self.max_iter = 5000 if args.max_iter is None else args.mx_iter
+        self.eval_episodes = 20 if args.eval_episodes is None else args.eval_episodes
         self.gamma = 0.99 if args.gamma is None else args.gamma
         self.clip_ratio = 0.2 if args.clip_ratio is None else args.clip_ratio
         self.actor_lr = 3e-4 if args.actor_lr is None else args.actor_lr
@@ -73,7 +77,7 @@ class PPOAgent(object):
         self.models_path = self.env_name + '\\models'
         self.results_path = self.env_name + '\\results'
 
-        if os.path.exists(self.env_name):
+        if os.path.exists(self.env_name) and not load_model:
             shutil.rmtree(self.env_name) 
             os.makedirs(self.models_path)
             os.makedirs(self.results_path)
@@ -91,8 +95,8 @@ class PPOAgent(object):
         self.buffer_counter, self.trajectory_start_index = 0, 0
 
         # creating Actor and Critic models
-        self.create_actor()
-        self.create_critic()
+        self.create_actor(load_model)
+        self.create_critic(load_model)
 
         # initialization of Actor and Critic optimizers
         self.actor_optimizer = keras.optimizers.Adam(learning_rate=self.actor_lr)
@@ -158,13 +162,13 @@ class PPOAgent(object):
         return rep
 
 
-    def create_actor(self) -> None:
+    def create_actor(self, load_model: bool=False) -> None:
 
         """
             Function for creating Actor model.
 
             :params:
-                - None
+                - load_model: indicator for loading Actor model
 
             :return:
                 - None
@@ -181,14 +185,17 @@ class PPOAgent(object):
         
         self.actor = keras.Model(inputs=state_input, outputs=logits_output, name='Actor_Model')
 
+        if load_model and os.path.exists(self.models_path + '\\actor.h5'):
+            self.actor.load_weights(self.models_path + '\\actor.h5')
 
-    def create_critic(self) -> None:
+
+    def create_critic(self, load_model: bool=False) -> None:
 
         """
             Function for creating Critic model.
 
             :params:
-                - None
+                - load_model: indicator for loading Critic model
 
             :return:
                 - None
@@ -205,6 +212,9 @@ class PPOAgent(object):
         value = tf.squeeze(value_output, axis=1)
 
         self.critic = keras.Model(inputs=state_input, outputs=value, name='Critic_Model')
+
+        if load_model and os.path.exists(self.models_path + '\\critic.h5'):
+            self.critic.load_weights(self.models_path + '\\critic.h5')
 
 
     @tf.function
@@ -330,19 +340,38 @@ class PPOAgent(object):
         # incrementing memory counter
         self.buffer_counter += 1
 
-# --------------------------------------------------------------------------------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------------------------------
 
-    def discounted_cumulative_sums(self, x, discount):
-        # Discounted cumulative sums of vectors for computing rewards-to-go and advantage estimates
+    def discounted_cumulative_sums(self, x: np.ndarray, discount: float) -> float:
+
+        """ 
+            Function for computing discounted cumulative sums over provided vector and provided discount factor.
+
+            :params:
+                - x: provide vector
+                - discount: discount factor
+
+            :return:
+                - calculated sums
+
+        """
+
         return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
 
 
-    def finish_trajectory(self, last_value=0):
+    def finish_trajectory(self, last_value: float=0.0) -> None:
 
-        # Finish the trajectory by computing advantage estimates and rewards-to-go
+        """ 
+            Function for finishing trajectories in terminal state or when max iteration
+            exceeded, by computing advantage estimates and rewards-to-go, using current buffers.
+
+            :params:
+                - last_value: last value from training
+
+            :return:
+                - None
+
+        """
+
         path_slice = slice(self.trajectory_start_index, self.buffer_counter)
         rewards = np.append(self.reward_buffer[path_slice], last_value)
         values = np.append(self.value_buffer[path_slice], last_value)
@@ -353,11 +382,6 @@ class PPOAgent(object):
         self.return_buffer[path_slice] = self.discounted_cumulative_sums(rewards, self.gamma)[:-1]
 
         self.trajectory_start_index = self.buffer_counter
-
-# --------------------------------------------------------------------------------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------------------------------
-# --------------------------------------------------------------------------------------------------------------------------------
 
 
     def train(self, render: bool=False) -> None:
@@ -372,10 +396,10 @@ class PPOAgent(object):
                 - None:
         """
 
-        # initialize episode return and episode length
-        episode_return, episode_length = 0, 0
+        self.train_episodic_rewards, self.train_episodic_lengths = [], []
 
         print('--------------------------------------------------------------------')
+        print('-------------------------- TRAINING --------------------------------')
 
         # iterating over episodes
         for episode in range(self.num_episodes):
@@ -383,15 +407,13 @@ class PPOAgent(object):
             # reseting environment on the start of episode
             state = self.env.reset()
 
-            # Initialize the sum of the returns, lengths and number of episodes for each epoch
-            sum_return = 0
-            sum_length = 0
-            num_episodes = 0
+            # initialize episode reward and episode length
+            episode_reward, episode_length = 0, 0
 
-            # Iterate over the steps of each epoch
+            # iterating over the steps for each episode
             for t in range(self.max_iter):
 
-                print(f'Executing Episode {episode+1}/{self.num_episodes} ---> Executing Iteration {t+1} [max={self.max_iter}]', end='\r')
+                print(f'Executing Episode {episode+1}/{self.num_episodes} ---> Executing Iteration {t+1}', end='\r')
 
                 # rendering OpenAI Gym Environment
                 if render:
@@ -404,10 +426,10 @@ class PPOAgent(object):
                 # taking step in environment and getting reward and new state
                 new_state, reward, done, _ = self.env.step(action[0].numpy())
 
-                episode_return += reward
+                episode_reward += reward
                 episode_length += 1
 
-                # Get the value and log-probability of the action
+                # get the value and log-probability of the action
                 value_t = self.critic(state)
                 logprobability_t = self.logprobabilities(logits, action)
 
@@ -417,15 +439,14 @@ class PPOAgent(object):
                 # state transition
                 state = new_state
 
-                # Finish trajectory if reached to a terminal state
-                terminal = done
-                if terminal or (t == self.max_iter - 1):
+                # finish trajectory if reached to a terminal state
+                if done or (t == self.max_iter - 1):
                     last_value = 0 if done else self.critic(state.reshape(1, -1))
                     self.finish_trajectory(last_value)
-                    sum_return += episode_return
-                    sum_length += episode_length
-                    num_episodes += 1
+                    break
 
+            self.train_episodic_rewards.append(episode_reward)
+            self.train_episodic_lengths.append(episode_length)
 
             # reseting buffer indices
             self.buffer_counter, self.trajectory_start_index = 0, 0
@@ -450,9 +471,141 @@ class PPOAgent(object):
                 # iterative Critic model updating
                 self.update_critic()
 
-            # Print mean return and length for each episode
-            print(f"Episode: {episode + 1}. Mean Return: {sum_return / num_episodes}. Mean Length: {sum_length / num_episodes}")
+            # print episodic reward and episode duration
+            print(f'Episode: {episode + 1}/{self.num_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}')
 
-        # TODO - save models, save results
+        # saving model weigths
+        self.actor.save_weights(self.models_path + '\\actor.h5')
+        self.critic.save_weights(self.models_path + '\\critic.h5')
+
+        # visulazing results
+        self.visualize()
 
 
+    def evalute(self, render: bool=False) -> None:
+
+        """
+            Function for evaluating agent.
+
+            :params:
+                - render: indicator for rendering OpenAI Gym Environment
+
+            :return:
+                - None:
+        """
+
+        self.eval_episodic_rewards, self.eval_episodic_lengths = [], []
+
+        print('--------------------------------------------------------------------')
+        print('-------------------------- EVALUATION ------------------------------')
+
+        # iterating over episodes
+        for episode in range(self.eval_episodes):
+
+            # reseting environment on the start of episode
+            state = self.env.reset()
+
+            # initialize episode reward and episode length
+            episode_reward, episode_length = 0, 0
+
+            # iterating over the steps for each episode
+            for t in range(self.max_iter):
+
+                print(f'Executing Episode {episode+1}/{self.num_episodes} ---> Executing Iteration {t+1}', end='\r')
+
+                # rendering OpenAI Gym Environment
+                if render:
+                    self.env.render()
+
+                # getting logits and action 
+                state = state.reshape(1, -1)
+                _, action = self.sample_action(state)
+
+                # taking step in environment and getting reward and new state
+                new_state, reward, done, _ = self.env.step(action[0].numpy())
+
+                episode_reward += reward
+                episode_length += 1
+
+                # state transition
+                state = new_state
+
+                # finish trajectory if reached to a terminal state
+                if done:
+                    break
+
+            self.eval_episodic_rewards.append(episode_reward)
+            self.eval_episodic_lengths.append(episode_length)
+
+            # print episodic reward and episode duration
+            print(f'Episode: {episode + 1}/{self.eval_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}')
+
+        # visulazing results
+        self.visualize(train=False)
+
+    
+    def visualize(self, train: bool=False) -> None:
+        
+        """
+            Function for visualizing agents performance.
+
+            :params:
+                - train: indicator for visualizing training (if True) or evaluation (if False) results
+
+            :return:
+                - None
+        """
+
+        if train:
+            rewards = self.train_episodic_rewards
+            lenghts = self.train_episodic_lengths
+            suptitle = 'TRAINING PROCESS'
+            filename = '\\training.png'
+
+        else:
+            rewards = self.eval_episodic_rewards
+            lenghts = self.eval_episodic_lengths
+            suptitle = 'EVALUATION PROCESS'
+            filename = '\\evaluation.png'
+
+        fig, axes = plt.subplots(ncols=2, figsize=(20,14))
+        ax = axes.ravel()
+
+        ax[0].plot(np.arange(1, len(rewards)+1), rewards)
+        ax[0].set_title('Total episodic reward')
+        ax[0].set_xlabel('#No. Episode')
+        ax[0].set_ylabel('Total reward')
+        ax[0].grid()
+
+        ax[1].plot(np.arange(1, len(lenghts)+1), lenghts)
+        ax[1].set_title('Episode duration')
+        ax[1].set_xlabel('#No. Episode')
+        ax[1].set_ylabel('Duration [in iterations]')
+        ax[1].grid()
+
+        plt.suptitle(suptitle)
+        plt.tight_layout()
+        plt.show()
+
+        fig.savefig(self.results_path + filename, facecolor = 'white', bbox_inches='tight')
+
+
+    def dump_info(self) -> None:
+
+        """
+            Function for dumping agent's info into txt file.
+
+            :params:
+                - None
+
+            :return:
+                - None
+        """
+
+        with open(self.env_name + 'info.txt', 'w') as f:
+            f.write(self.__repr__())
+            f.write('\n--------------------------------------------------------------------\n')
+            f.write(self.actor.summary())
+            f.write('\n--------------------------------------------------------------------\n')
+            f.write(self.critic.summary())
+            f.write('\n--------------------------------------------------------------------\n')

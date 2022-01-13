@@ -6,6 +6,7 @@ parser = argparse.ArgumentParser(description='Parsing program arguments - algori
 parser.add_argument('--env_name', type=str)
 parser.add_argument('--num_episodes', type=int)
 parser.add_argument('--max_iter', type=int)
+parser.add_argument('--eval_episodes', type=int)
 parser.add_argument('--gamma', type=float)
 parser.add_argument('--clip_ratio', type=float)
 parser.add_argument('--actor_lr', type=float)
@@ -33,8 +34,11 @@ if __name__ == "__main__":
         # training agent
         ppo_agent.train()
 
+        # evaluation 
+        ppo_agent.evalute()
+
+        # dumping all informations
+        ppo_agent.dump_info()
+
         # deleting agent
         del ppo_agent
-
-    
-    
