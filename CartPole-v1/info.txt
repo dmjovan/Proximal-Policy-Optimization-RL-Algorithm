@@ -1,0 +1,116 @@
+--------------------------------------------------------------------
+---------------- Proximal Policy Optimization Agent ----------------
+********************
+********************
+OpenAI Gym Environment used: CartPole-v1
+Environment state space size: 4
+Environment action space is: discrete
+Environment number of actions is: 2
+Environment reward definition: Reward is 1 for every step taken, including the termination step
+********************
+********************
+Number of training episodes: 30
+Maximum iterations over one episode: 4000
+Discount factor - gamma: 0.99
+Clip ratio: 0.2
+Actor model learning rate: 0.0003
+Critic model learning rate: 0.001
+Number of iterations for updating Actor model: 80
+Number of iterations for updating Critic model: 80
+Lambda factor: 0.97
+Target KL value: 0.01
+Number of units for hidden layers of Actor/Critic models: (64, 64)
+Buffer size: 5000
+--------------------------------------------------------------------
+--------------------------------------------------------------------
+Model: "Actor_Model"
+_________________________________________________________________
+Layer (type)                 Output Shape              Param #   
+=================================================================
+input_1 (InputLayer)         [(None, 4)]               0         
+_________________________________________________________________
+dense (Dense)                (None, 64)                320       
+_________________________________________________________________
+dense_1 (Dense)              (None, 64)                4160      
+_________________________________________________________________
+dense_2 (Dense)              (None, 2)                 130       
+=================================================================
+Total params: 4,610
+Trainable params: 4,610
+Non-trainable params: 0
+_________________________________________________________________
+
+--------------------------------------------------------------------
+Model: "Critic_Model"
+_________________________________________________________________
+Layer (type)                 Output Shape              Param #   
+=================================================================
+input_2 (InputLayer)         [(None, 4)]               0         
+_________________________________________________________________
+dense_3 (Dense)              (None, 64)                320       
+_________________________________________________________________
+dense_4 (Dense)              (None, 64)                4160      
+_________________________________________________________________
+dense_5 (Dense)              (None, 1)                 65        
+_________________________________________________________________
+tf.compat.v1.squeeze (TFOpLa (None,)                   0         
+=================================================================
+Total params: 4,545
+Trainable params: 4,545
+Non-trainable params: 0
+_________________________________________________________________
+
+--------------------------------------------------------------------
+-------------------------- TRAINING --------------------------------
+Episode: 1/30 --> Episodic Reward: 16.0 || Episode Duration [in iterations]: 16/4000
+Episode: 2/30 --> Episodic Reward: 19.0 || Episode Duration [in iterations]: 19/4000
+Episode: 3/30 --> Episodic Reward: 30.0 || Episode Duration [in iterations]: 30/4000
+Episode: 4/30 --> Episodic Reward: 21.0 || Episode Duration [in iterations]: 21/4000
+Episode: 5/30 --> Episodic Reward: 20.0 || Episode Duration [in iterations]: 20/4000
+Episode: 6/30 --> Episodic Reward: 16.0 || Episode Duration [in iterations]: 16/4000
+Episode: 7/30 --> Episodic Reward: 19.0 || Episode Duration [in iterations]: 19/4000
+Episode: 8/30 --> Episodic Reward: 22.0 || Episode Duration [in iterations]: 22/4000
+Episode: 9/30 --> Episodic Reward: 69.0 || Episode Duration [in iterations]: 69/4000
+Episode: 10/30 --> Episodic Reward: 17.0 || Episode Duration [in iterations]: 17/4000
+Episode: 11/30 --> Episodic Reward: 12.0 || Episode Duration [in iterations]: 12/4000
+Episode: 12/30 --> Episodic Reward: 23.0 || Episode Duration [in iterations]: 23/4000
+Episode: 13/30 --> Episodic Reward: 12.0 || Episode Duration [in iterations]: 12/4000
+Episode: 14/30 --> Episodic Reward: 14.0 || Episode Duration [in iterations]: 14/4000
+Episode: 15/30 --> Episodic Reward: 38.0 || Episode Duration [in iterations]: 38/4000
+Episode: 16/30 --> Episodic Reward: 10.0 || Episode Duration [in iterations]: 10/4000
+Episode: 17/30 --> Episodic Reward: 27.0 || Episode Duration [in iterations]: 27/4000
+Episode: 18/30 --> Episodic Reward: 16.0 || Episode Duration [in iterations]: 16/4000
+Episode: 19/30 --> Episodic Reward: 27.0 || Episode Duration [in iterations]: 27/4000
+Episode: 20/30 --> Episodic Reward: 28.0 || Episode Duration [in iterations]: 28/4000
+Episode: 21/30 --> Episodic Reward: 15.0 || Episode Duration [in iterations]: 15/4000
+Episode: 22/30 --> Episodic Reward: 11.0 || Episode Duration [in iterations]: 11/4000
+Episode: 23/30 --> Episodic Reward: 11.0 || Episode Duration [in iterations]: 11/4000
+Episode: 24/30 --> Episodic Reward: 46.0 || Episode Duration [in iterations]: 46/4000
+Episode: 25/30 --> Episodic Reward: 21.0 || Episode Duration [in iterations]: 21/4000
+Episode: 26/30 --> Episodic Reward: 26.0 || Episode Duration [in iterations]: 26/4000
+Episode: 27/30 --> Episodic Reward: 12.0 || Episode Duration [in iterations]: 12/4000
+Episode: 28/30 --> Episodic Reward: 21.0 || Episode Duration [in iterations]: 21/4000
+Episode: 29/30 --> Episodic Reward: 46.0 || Episode Duration [in iterations]: 46/4000
+Episode: 30/30 --> Episodic Reward: 19.0 || Episode Duration [in iterations]: 19/4000
+--------------------------------------------------------------------
+-------------------------- EVALUATION ------------------------------
+Episode: 1/20 --> Episodic Reward: 25.0 || Episode Duration [in iterations]: 25/4000
+Episode: 2/20 --> Episodic Reward: 16.0 || Episode Duration [in iterations]: 16/4000
+Episode: 3/20 --> Episodic Reward: 19.0 || Episode Duration [in iterations]: 19/4000
+Episode: 4/20 --> Episodic Reward: 22.0 || Episode Duration [in iterations]: 22/4000
+Episode: 5/20 --> Episodic Reward: 19.0 || Episode Duration [in iterations]: 19/4000
+Episode: 6/20 --> Episodic Reward: 16.0 || Episode Duration [in iterations]: 16/4000
+Episode: 7/20 --> Episodic Reward: 17.0 || Episode Duration [in iterations]: 17/4000
+Episode: 8/20 --> Episodic Reward: 18.0 || Episode Duration [in iterations]: 18/4000
+Episode: 9/20 --> Episodic Reward: 24.0 || Episode Duration [in iterations]: 24/4000
+Episode: 10/20 --> Episodic Reward: 19.0 || Episode Duration [in iterations]: 19/4000
+Episode: 11/20 --> Episodic Reward: 15.0 || Episode Duration [in iterations]: 15/4000
+Episode: 12/20 --> Episodic Reward: 18.0 || Episode Duration [in iterations]: 18/4000
+Episode: 13/20 --> Episodic Reward: 18.0 || Episode Duration [in iterations]: 18/4000
+Episode: 14/20 --> Episodic Reward: 15.0 || Episode Duration [in iterations]: 15/4000
+Episode: 15/20 --> Episodic Reward: 19.0 || Episode Duration [in iterations]: 19/4000
+Episode: 16/20 --> Episodic Reward: 18.0 || Episode Duration [in iterations]: 18/4000
+Episode: 17/20 --> Episodic Reward: 13.0 || Episode Duration [in iterations]: 13/4000
+Episode: 18/20 --> Episodic Reward: 43.0 || Episode Duration [in iterations]: 43/4000
+Episode: 19/20 --> Episodic Reward: 17.0 || Episode Duration [in iterations]: 17/4000
+Episode: 20/20 --> Episodic Reward: 11.0 || Episode Duration [in iterations]: 11/4000

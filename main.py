@@ -27,18 +27,21 @@ if __name__ == "__main__":
     # parsing arguments
     args = parser.parse_args()
 
-    for env in envs:
-        # creating agent for Proximal Policy Optimization algorithm
-        ppo_agent = PPOAgent(args, env)
+    env_name = 'CartPole-v1'
 
-        # training agent
-        ppo_agent.train()
+    assert env_name in envs, 'Environment is not supported!'
 
-        # evaluation 
-        ppo_agent.evalute()
+    # creating agent for Proximal Policy Optimization algorithm
+    ppo_agent = PPOAgent(args, env_name, num_episodes=30, max_iter=4000, train_actor_iter=80, train_critic_iter=80)
 
-        # dumping all informations
-        ppo_agent.dump_info()
+    # training agent
+    ppo_agent.train()
 
-        # deleting agent
-        del ppo_agent
+    # evaluation 
+    ppo_agent.evaluate(render=True)
+
+    # dumping all informations
+    ppo_agent.dump_agent_info()
+
+    # deleting agent
+    del ppo_agent

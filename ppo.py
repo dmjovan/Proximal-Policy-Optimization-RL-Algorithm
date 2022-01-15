@@ -11,7 +11,7 @@ import scipy.signal
 from scipy.signal.filter_design import normalize
 
 available_envs = {
-                  'CartPole-v0': {'type': 'discrete', 'reward_info': 'Reward is 1 for every step taken, including the termination step'},
+                  'CartPole-v1': {'type': 'discrete', 'reward_info': 'Reward is 1 for every step taken, including the termination step'},
                   'MountainCar-v0': {'type': 'discrete', 'reward_info': 'Reward is -1.0 if not terminal state, 0.0 if agent has reached the flag'},
                   'Acrobot-v1': {'type': 'discrete', 'reward_info': 'Reward is -1.0 if not terminal state, 0.0 if terminal'},
                   'MountainCarContinuous-v0': {'type': 'continuous', 'reward_info': 'Reward is 100 if agent reached the flag, reward is decreased based on amount of energy consumed each step'},
@@ -22,14 +22,46 @@ class PPOAgent(object):
 
     """ Implementation of Proximal Policy Optimization agent from Machine Learning field of Reinforcement Learning """    
 
-    def __init__(self, args: object, _env_name: str=None, load_model: bool=False) -> None:
+    def __init__(self, 
+                 args: object,
+                 env_name: str=None, 
+                 num_episodes: int=200,
+                 max_iter: int=5000,
+                 eval_episodes: int=20,
+                 gamma: float=0.99,
+                 clip_ratio: float=0.2,
+                 actor_lr: float=3e-4,
+                 critic_lr: float=1e-3,
+                 train_actor_iter: int=100,
+                 train_critic_iter: int=100,
+                 lambda_: float=0.97,
+                 target_kl: float=0.01,
+                 hidden_units: tuple=(64,64),
+                 buffer_size: int=5000,
+                 load_model: bool=False) -> None:
 
         """ 
             Constructor of the class.
 
             :params:
-                - args: ArgumentParser object 
-                - _env_name: name of default Environment or Environment for for-loop training inside IDE
+                - args: ArgumentParser object
+
+                ********** constructor arguments for IDE calling **********
+
+                - env_name: name of OpenAI Gym Environments
+                - num_episodes: number of episodes for training
+                - max_iter: maximum of iterations in one episode
+                - eval_episodes: number of evaluation episodes
+                - gamma: discount factor
+                - clip_ratio: clipping ratio
+                - actor_lr: Actor model learning rate
+                - critic_lr: Critic model learning rate
+                - train_actor_iter: number of iterations for training Actor model
+                - train_critic_iter: number of iterations for training Critic model
+                - lambda_: lambda factor
+                - target_kl: target KL value
+                - hidden_units: tuple containing all number of units/neurons for each layer
+                - buffer_size: size of buffer/memory
                 - load_model: indicator for loading models if exist
 
             :return:
@@ -40,20 +72,20 @@ class PPOAgent(object):
         tf.random.set_seed(1)
 
         # defining hyper-parameters
-        self.env_name = _env_name if args.env_name is None else args.env_name
-        self.num_episodes = 100 if args.num_episodes is None else args.num_episodes
-        self.max_iter = 5000 if args.max_iter is None else args.mx_iter
-        self.eval_episodes = 20 if args.eval_episodes is None else args.eval_episodes
-        self.gamma = 0.99 if args.gamma is None else args.gamma
-        self.clip_ratio = 0.2 if args.clip_ratio is None else args.clip_ratio
-        self.actor_lr = 3e-4 if args.actor_lr is None else args.actor_lr
-        self.critic_lr = 1e-3 if args.critic_lr is None else args.critic_lr
-        self.train_actor_iter = 60 if args.train_actor_iter is None else args.train_actor_iter
-        self.train_critic_iter = 60 if args.train_critic_iter is None else args.train_critic_iter
-        self.lambda_ = 0.97 if args.lambda_ is None else args.lambda_
-        self.target_kl = 0.01 if args.target_kl is None else args.target_kl
-        self.hidden_units = [64, 64] if args.hidden_units is None else args.hidden_units
-        self.buffer_size = self.max_iter if args.buffer_size is None else args.buffer_size
+        self.env_name = env_name if args.env_name is None else args.env_name
+        self.num_episodes = num_episodes if args.num_episodes is None else args.num_episodes
+        self.max_iter = max_iter if args.max_iter is None else args.mx_iter
+        self.eval_episodes = eval_episodes if args.eval_episodes is None else args.eval_episodes
+        self.gamma = gamma if args.gamma is None else args.gamma
+        self.clip_ratio = clip_ratio if args.clip_ratio is None else args.clip_ratio
+        self.actor_lr = actor_lr if args.actor_lr is None else args.actor_lr
+        self.critic_lr = critic_lr if args.critic_lr is None else args.critic_lr
+        self.train_actor_iter = train_actor_iter if args.train_actor_iter is None else args.train_actor_iter
+        self.train_critic_iter = train_critic_iter if args.train_critic_iter is None else args.train_critic_iter
+        self.lambda_ = lambda_ if args.lambda_ is None else args.lambda_
+        self.target_kl = target_kl if args.target_kl is None else args.target_kl
+        self.hidden_units = hidden_units if args.hidden_units is None else args.hidden_units
+        self.buffer_size = buffer_size if args.buffer_size is None else args.buffer_size
 
         # checking if envirnoment is supported
         assert self.env_name in available_envs.keys(), 'Provided environment is not supported!'
@@ -79,8 +111,10 @@ class PPOAgent(object):
 
         if os.path.exists(self.env_name) and not load_model:
             shutil.rmtree(self.env_name) 
-            os.makedirs(self.models_path)
-            os.makedirs(self.results_path)
+
+        os.makedirs(self.models_path)
+        os.makedirs(self.results_path)
+    
 
         # initialization of all buffers for storing trajectories
         self.state_buffer = np.zeros((self.buffer_size, self.state_space_dims), dtype=np.float32)
@@ -101,18 +135,16 @@ class PPOAgent(object):
         # initialization of Actor and Critic optimizers
         self.actor_optimizer = keras.optimizers.Adam(learning_rate=self.actor_lr)
         self.critic_optimizer = keras.optimizers.Adam(learning_rate=self.critic_lr)
-        
-        print(self.__repr__())
-        
-        # printing Actor model summary
-        print('--------------------------------------------------------------------')
-        self.actor.summary()
-        print('--------------------------------------------------------------------')
+    
+        # initialization of training and evaluation records
+        self.train_episodic_rewards = []
+        self.train_episodic_lengths = []
+        self.eval_episodic_rewards = []
+        self.eval_episodic_lengths = []
 
-        # printing Critic model summary
-        print('--------------------------------------------------------------------')
-        self.critic.summary()
-        print('--------------------------------------------------------------------')
+        # initialization of train and eval texts
+        self.train_text = ''
+        self.eval_text = ''
 
 
     def __repr__(self) -> str:
@@ -472,17 +504,17 @@ class PPOAgent(object):
                 self.update_critic()
 
             # print episodic reward and episode duration
-            print(f'Episode: {episode + 1}/{self.num_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}')
+            self.train_text += f'Episode: {episode + 1}/{self.num_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}\n'
 
         # saving model weigths
-        self.actor.save_weights(self.models_path + '\\actor.h5')
-        self.critic.save_weights(self.models_path + '\\critic.h5')
+        self.actor.save(self.models_path + '\\actor.h5')
+        self.critic.save(self.models_path + '\\critic.h5')
 
         # visulazing results
         self.visualize()
 
 
-    def evalute(self, render: bool=False) -> None:
+    def evaluate(self, render: bool=False) -> None:
 
         """
             Function for evaluating agent.
@@ -538,13 +570,13 @@ class PPOAgent(object):
             self.eval_episodic_lengths.append(episode_length)
 
             # print episodic reward and episode duration
-            print(f'Episode: {episode + 1}/{self.eval_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}')
+            self.eval_text += f'Episode: {episode + 1}/{self.eval_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}\n'
 
         # visulazing results
         self.visualize(train=False)
 
     
-    def visualize(self, train: bool=False) -> None:
+    def visualize(self, train: bool=True) -> None:
         
         """
             Function for visualizing agents performance.
@@ -556,41 +588,38 @@ class PPOAgent(object):
                 - None
         """
 
-        if train:
-            rewards = self.train_episodic_rewards
-            lenghts = self.train_episodic_lengths
-            suptitle = 'TRAINING PROCESS'
-            filename = '\\training.png'
-
-        else:
-            rewards = self.eval_episodic_rewards
-            lenghts = self.eval_episodic_lengths
-            suptitle = 'EVALUATION PROCESS'
-            filename = '\\evaluation.png'
-
-        fig, axes = plt.subplots(ncols=2, figsize=(20,14))
+        fig, axes = plt.subplots(ncols=2, figsize=(28,14))
         ax = axes.ravel()
 
-        ax[0].plot(np.arange(1, len(rewards)+1), rewards)
+        if train:
+            ax[0].plot(np.arange(1, len(self.train_episodic_rewards)+1), self.train_episodic_rewards)
+            ax[1].plot(np.arange(1, len(self.train_episodic_lengths)+1), self.train_episodic_lengths)
+            plt.suptitle('TRAINING PROCESS')
+            filename = r'\\training.png'
+
+        else:
+            ax[0].plot(np.arange(1, len(self.eval_episodic_rewards)+1), self.eval_episodic_rewards)
+            ax[1].plot(np.arange(1, len(self.eval_episodic_lengths)+1), self.eval_episodic_lengths)
+            plt.suptitle('EVALUATION PROCESS')
+            filename = r'\\evaluation.png'
+        
         ax[0].set_title('Total episodic reward')
         ax[0].set_xlabel('#No. Episode')
         ax[0].set_ylabel('Total reward')
         ax[0].grid()
-
-        ax[1].plot(np.arange(1, len(lenghts)+1), lenghts)
+        
         ax[1].set_title('Episode duration')
         ax[1].set_xlabel('#No. Episode')
         ax[1].set_ylabel('Duration [in iterations]')
         ax[1].grid()
 
-        plt.suptitle(suptitle)
         plt.tight_layout()
         plt.show()
 
         fig.savefig(self.results_path + filename, facecolor = 'white', bbox_inches='tight')
 
 
-    def dump_info(self) -> None:
+    def dump_agent_info(self) -> None:
 
         """
             Function for dumping agent's info into txt file.
@@ -602,10 +631,15 @@ class PPOAgent(object):
                 - None
         """
 
-        with open(self.env_name + 'info.txt', 'w') as f:
+        with open(self.env_name + '\\info.txt', 'w') as f:
             f.write(self.__repr__())
             f.write('\n--------------------------------------------------------------------\n')
-            f.write(self.actor.summary())
+            self.actor.summary(print_fn=lambda x: f.write(x + '\n'))
             f.write('\n--------------------------------------------------------------------\n')
-            f.write(self.critic.summary())
+            self.critic.summary(print_fn=lambda x: f.write(x + '\n'))
             f.write('\n--------------------------------------------------------------------\n')
+            f.write('-------------------------- TRAINING --------------------------------\n')
+            f.write(self.train_text)
+            f.write('--------------------------------------------------------------------\n')
+            f.write('-------------------------- EVALUATION ------------------------------\n')
+            f.write(self.eval_text)
