@@ -1,14 +1,25 @@
 import numpy as np
 from numpy.lib.npyio import load
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
+import torch
+import torch.nn as nn
+from torch.distributions import MultivariateNormal
+from torch.distributions import Categorical
 import gym
 import os
 import shutil
 import matplotlib.pyplot as plt
 import scipy.signal
 from scipy.signal.filter_design import normalize
+
+# setting device
+device = torch.device('cpu')
+
+if(torch.cuda.is_available()): 
+    device = torch.device('cuda:0') 
+    torch.cuda.empty_cache()
+    print("Device set to : " + str(torch.cuda.get_device_name(device)))
+else:
+    print("Device set to : CPU")
 
 available_envs = {
                   'CartPole-v1': {'type': 'discrete', 'reward_info': 'Reward is 1 for every step taken, including the termination step'},
