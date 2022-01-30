@@ -1,0 +1,7 @@
+	                  states | actions |
+             CartPole-v1:    4        2
+          MountainCar-v0:    2        3
+              Acrobot-v1:    6        3
+--------------------------------------------
+MountainCarContinuous-v0:    2        1
+             Pendulum-v1:    3        1

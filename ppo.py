@@ -1,44 +1,254 @@
-import numpy as np
-from numpy.lib.npyio import load
-import tensorflow as tf
-from tensorflow import keras
-from tensorflow.keras import layers
-import gym
 import os
+import gym
+import glob
+import torch
 import shutil
+import numpy as np
+import torch.nn as nn
 import matplotlib.pyplot as plt
-import scipy.signal
-from scipy.signal.filter_design import normalize
+
+from PIL import Image
+from torch.distributions import Categorical
+from torch.distributions import MultivariateNormal
 
 available_envs = {
                   'CartPole-v1': {'type': 'discrete', 'reward_info': 'Reward is 1 for every step taken, including the termination step'},
                   'MountainCar-v0': {'type': 'discrete', 'reward_info': 'Reward is -1.0 if not terminal state, 0.0 if agent has reached the flag'},
                   'Acrobot-v1': {'type': 'discrete', 'reward_info': 'Reward is -1.0 if not terminal state, 0.0 if terminal'},
                   'MountainCarContinuous-v0': {'type': 'continuous', 'reward_info': 'Reward is 100 if agent reached the flag, reward is decreased based on amount of energy consumed each step'},
-                  'Pendulum-v0': {'type': 'continuous', 'reward_info': 'None'}
+                  'Pendulum-v1': {'type': 'continuous', 'reward_info': 'None'}
                  }
 
-class PPOAgent(object):
+# setting device
+device = torch.device('cpu')
+
+if(torch.cuda.is_available()): 
+    device = torch.device('cuda:0') 
+    torch.cuda.empty_cache()
+    print(f'Device set to : {torch.cuda.get_device_name(device)}')
+else:
+    print('Device set to : CPU')
+
+
+class RolloutBuffer:
+
+    """ Implementation of Rollout Buffer for PPO algorithm """
+
+    def __init__(self):
+
+        """ Constructor of the class. """
+
+        self.actions = []
+        self.states = []
+        self.logprobs = []
+        self.rewards = []
+        self.is_terminals = []
+    
+
+    def clear(self):
+
+        """ Function for deleting all data from buffer. """
+
+        del self.actions[:]
+        del self.states[:]
+        del self.logprobs[:]
+        del self.rewards[:]
+        del self.is_terminals[:]
+
+
+class CriticModel(nn.Module):
+
+    """ Implementation of Critic Model class. """
+
+    def __init__(self, state_dim) -> None:
+
+        """ 
+            Constructor of class.
+        
+            :params:
+                - state_dim: dimensions of environment states
+
+            :return:
+                - None
+         """
+
+        super().__init__()
+
+        self.state_dim = state_dim
+
+        self.model = nn.Sequential(nn.Linear(self.state_dim, 64),
+                                   nn.Tanh(),
+                                   nn.Linear(64, 64),
+                                   nn.Tanh(),
+                                   nn.Linear(64, 1))
+
+    def evaluate(self, state: np.ndarray) -> float:
+
+        """ 
+            Function for evaluation of current state via Critic model.
+        
+            :params:
+                - state: current state
+
+            :return:
+                - state_value: value for current state, estimated with critic model
+         """
+
+        state_value = self.model(state)
+        
+        return state_value
+
+
+class ActorModel(nn.Module):
+
+    """ Implementation of Actor Model class. """
+
+    def __init__(self, state_dim: int, action_dim: int, actions_type: str, action_std_init: float=None) -> None:
+
+        """ 
+            Constructor of class.
+        
+            :params:
+                - state_dim: dimensions of environment states
+                - action_dim: dimensions of environment actions 
+                - actions_type: type of actions - either continuous or discrete
+                - action_std_init: initial standard deviation for actions, if they are continuous
+
+            :return:
+                - None
+         """
+
+        super().__init__()
+
+        self.state_dim = state_dim
+        self.action_dim = action_dim
+        self.actions_type = actions_type
+        self.action_var = None
+
+        if self.actions_type == 'continuous':
+
+            self.action_var = torch.full((self.action_dim,), action_std_init**2).to(device)
+            self.actor = nn.Sequential(nn.Linear(self.state_dim, 64),
+                                       nn.Tanh(),
+                                       nn.Linear(64, 64),
+                                       nn.Tanh(),
+                                       nn.Linear(64, self.action_dim),
+                                       nn.Tanh())
+
+        elif self.actions_type == 'discrete':
+
+            self.actor = nn.Sequential(nn.Linear(self.state_dim, 64),
+                                       nn.Tanh(),
+                                       nn.Linear(64, 64),
+                                       nn.Tanh(),
+                                       nn.Linear(64, self.action_dim),
+                                       nn.Softmax(dim=-1))
+
+        
+    def set_action_std(self, new_action_std: float) -> None:
+
+        """ 
+            Function for setting new actor standard deviation/variance.
+        
+            :params:
+                - new_action_std: new standard deviation for actor
+
+            :return:
+                - None
+         """
+
+        if self.actions_type == 'continuous':
+            self.action_var = torch.full((self.action_dim,), new_action_std**2).to(device)
+        else:
+            raise RuntimeError('Cannot set standard deviation! Actor model is instantiated for continuous actions, not for discrete!')
+
+
+    def feed_forward(self, state: np.ndarray) -> tuple:
+
+        """ 
+            Function for feeding Actor model with state and getting action and log probabilities from model.
+        
+            :params:
+                - state: current agents state
+
+            :return:
+                - action: action proposed by Actor model for provided state
+                - action_logprob: log-probability for proposed action
+         """
+
+        if self.actions_type == 'continuous':
+
+            action_mean = self.actor(state)
+            cov_mat = torch.diag(self.action_var).unsqueeze(dim=0)
+            dist = MultivariateNormal(action_mean, cov_mat)
+
+        elif self.actions_type == 'discrete':
+
+            action_probs = self.actor(state)
+            dist = Categorical(action_probs)
+
+        # sampling actions from Multivariable Normal or from Categorical Distribution 
+        action = dist.sample()
+        action_logprob = dist.log_prob(action)
+        
+        return action.detach(), action_logprob.detach()
+    
+
+    def evaluate(self, state: np.ndarray, action: float) -> tuple:
+
+        """ 
+            Function for evaluation of current state and action via Actor model.
+        
+            :params:
+                - state: current state
+                - action: proposed action in current state
+
+            :return:
+                - action_logprobs: log-probabilites fro proposed action
+                - dist_entropy: output distribution entropy
+         """
+
+        if self.actions_type == 'continuous':
+
+            action_mean = self.actor(state)
+            action_var = self.action_var.expand_as(action_mean)
+            cov_mat = torch.diag_embed(action_var).to(device)
+            dist = MultivariateNormal(action_mean, cov_mat)
+            
+            # for single action continuous environments
+            if self.action_dim == 1:
+                action = action.reshape(-1, self.action_dim)
+
+        elif self.actions_type == 'discrete':
+
+            action_probs = self.actor(state)
+            dist = Categorical(action_probs)
+
+        action_logprobs = dist.log_prob(action)
+        dist_entropy = dist.entropy()
+        
+        return action_logprobs, dist_entropy
+
+
+class PPOAgent:
 
     """ Implementation of Proximal Policy Optimization agent from Machine Learning field of Reinforcement Learning """    
 
     def __init__(self, 
                  args: object,
                  env_name: str=None, 
-                 num_episodes: int=200,
-                 max_iter: int=5000,
-                 eval_episodes: int=20,
+                 num_episodes: int=3000,
+                 max_iter: int=1000,
+                 eval_episodes: int=10,
                  gamma: float=0.99,
                  clip_ratio: float=0.2,
-                 actor_lr: float=3e-4,
-                 critic_lr: float=1e-3,
-                 train_actor_iter: int=100,
-                 train_critic_iter: int=100,
-                 lambda_: float=0.97,
-                 target_kl: float=0.01,
+                 actor_lr: float=0.0003,
+                 critic_lr: float=0.001,
+                 num_update_episodes: int=80,
+                 action_std_init: float=0.6,
                  hidden_units: tuple=(64,64),
-                 buffer_size: int=5000,
-                 load_model: bool=False) -> None:
+                 load_model: bool=False,
+                 random_seed: int=0) -> None:
 
         """ 
             Constructor of the class.
@@ -56,20 +266,15 @@ class PPOAgent(object):
                 - clip_ratio: clipping ratio
                 - actor_lr: Actor model learning rate
                 - critic_lr: Critic model learning rate
-                - train_actor_iter: number of iterations for training Actor model
-                - train_critic_iter: number of iterations for training Critic model
-                - lambda_: lambda factor
-                - target_kl: target KL value
+                - num_update_episodes: nnumber of episodes/epochs for updating Actor and Critic models
+                - action_std_init: standard deviation for Actor model
                 - hidden_units: tuple containing all number of units/neurons for each layer
-                - buffer_size: size of buffer/memory
                 - load_model: indicator for loading models if exist
+                - random_seed: random seed number
 
             :return:
                 - None
         """
-
-        np.random.seed(1)
-        tf.random.set_seed(1)
 
         # defining hyper-parameters
         self.env_name = env_name if args.env_name is None else args.env_name
@@ -80,15 +285,12 @@ class PPOAgent(object):
         self.clip_ratio = clip_ratio if args.clip_ratio is None else args.clip_ratio
         self.actor_lr = actor_lr if args.actor_lr is None else args.actor_lr
         self.critic_lr = critic_lr if args.critic_lr is None else args.critic_lr
-        self.train_actor_iter = train_actor_iter if args.train_actor_iter is None else args.train_actor_iter
-        self.train_critic_iter = train_critic_iter if args.train_critic_iter is None else args.train_critic_iter
-        self.lambda_ = lambda_ if args.lambda_ is None else args.lambda_
-        self.target_kl = target_kl if args.target_kl is None else args.target_kl
+        self.num_update_episodes = num_update_episodes if args.num_update_episodes is None else args.num_update_episodes
+        self.action_std_init = action_std_init if args.action_std_init is None else args.action_std_init
         self.hidden_units = hidden_units if args.hidden_units is None else args.hidden_units
-        self.buffer_size = buffer_size if args.buffer_size is None else args.buffer_size
 
-        # checking if envirnoment is supported
-        assert self.env_name in available_envs.keys(), 'Provided environment is not supported!'
+        # check if env_name is supported
+        assert self.env_name in available_envs.keys(), 'Environment is not supported!'
     
         self.env_type = available_envs[self.env_name]['type']
 
@@ -96,46 +298,73 @@ class PPOAgent(object):
         self.env = gym.make(self.env_name)
 
         # getting dimensions of state and action spaces
-        self.state_space_dims = self.env.observation_space.shape[0]
-        
-        if self.env_type == 'discrete':
-            self.action_space_dims = self.env.action_space.n
+        self.state_dim = self.env.observation_space.shape[0]
 
-        elif self.env_type == 'continuous':
-            pass
-            # TODO add here
+        if self.env_type == 'continuous':
+            self.action_dim  = self.env.action_space.shape[0]
+        
+        elif self.env_type == 'discrete':
+            self.action_dim = self.env.action_space.n
 
         # creating paths and folders for storing results
-        self.models_path = self.env_name + '\\models'
-        self.results_path = self.env_name + '\\results'
+        self.models_path = self.env_name + '\\models\\'
+        self.plots_path = self.env_name + '\\plots\\'
+        self.gif_images_path = self.env_name + '\\gif_images\\'
+        self.gif_path  = self.env_name + '\\gif\\'
+        self.log_path = self.env_name + '\\log\\'
 
         if os.path.exists(self.env_name) and not load_model:
             shutil.rmtree(self.env_name) 
+        
+        if not os.path.exists(self.models_path):
+            os.makedirs(self.models_path)
+        
+        if not os.path.exists(self.plots_path):
+            os.makedirs(self.plots_path)
 
-        os.makedirs(self.models_path)
-        os.makedirs(self.results_path)
+        if not os.path.exists(self.gif_images_path):
+            os.makedirs(self.gif_images_path)
+        
+        if not os.path.exists(self.gif_path):
+            os.makedirs(self.gif_path)
+          
+        if not os.path.exists(self.log_path):  
+            os.makedirs(self.log_path)
     
-
         # initialization of all buffers for storing trajectories
-        self.state_buffer = np.zeros((self.buffer_size, self.state_space_dims), dtype=np.float32)
-        self.action_buffer = np.zeros(self.buffer_size, dtype=np.int32)
-        self.advantage_buffer = np.zeros(self.buffer_size, dtype=np.float32)
-        self.reward_buffer = np.zeros(self.buffer_size, dtype=np.float32)
-        self.return_buffer = np.zeros(self.buffer_size, dtype=np.float32)
-        self.value_buffer = np.zeros(self.buffer_size, dtype=np.float32)
-        self.logprobability_buffer = np.zeros(self.buffer_size, dtype=np.float32)
+        self.buffer = RolloutBuffer()
 
-        # initialization of volatle indices for tracking buffer
-        self.buffer_counter, self.trajectory_start_index = 0, 0
+        self.action_std = self.action_std_init
 
-        # creating Actor and Critic models
-        self.create_actor(load_model)
-        self.create_critic(load_model)
+        # creating Actor and Critic models - CURRENT POLICY
+        self.actor = ActorModel(self.state_dim, self.action_dim, self.env_type, self.action_std_init).to(device)
+        self.critic = CriticModel(self.state_dim).to(device)
 
         # initialization of Actor and Critic optimizers
-        self.actor_optimizer = keras.optimizers.Adam(learning_rate=self.actor_lr)
-        self.critic_optimizer = keras.optimizers.Adam(learning_rate=self.critic_lr)
-    
+        self.optimizer = torch.optim.Adam([{'params': self.actor.parameters(), 'lr': self.actor_lr},
+                                           {'params': self.critic.parameters(), 'lr': self.critic_lr}])
+
+        # creating Actor and Critic models - OLD POLICY
+        self.actor_old = ActorModel(self.state_dim, self.action_dim, self.env_type, self.action_std_init).to(device)
+        self.critic_old = CriticModel(self.state_dim).to(device)
+
+        # load last state dict for old policy
+        self.actor_old.load_state_dict(self.actor.state_dict())
+        self.critic_old.load_state_dict(self.critic.state_dict())
+
+        # loading from stored models
+        if load_model:
+            self.load_models()
+
+        # initialization of Mean-Squared Error Loss function from PyTorch
+        self.MseLoss = nn.MSELoss()
+        
+        # setting random seeds
+        if random_seed:
+            np.random.seed(random_seed)
+            torch.manual_seed(random_seed) 
+            self.env.seed(random_seed)
+
         # initialization of training and evaluation records
         self.train_episodic_rewards = []
         self.train_episodic_lengths = []
@@ -164,16 +393,9 @@ class PPOAgent(object):
         rep += '********************\n'
         rep += '********************\n'
         rep += f'OpenAI Gym Environment used: {self.env_name}\n'
-        rep += f'Environment state space size: {self.state_space_dims}\n'
+        rep += f'Environment state space size: {self.state_dim}\n'
         rep += f'Environment action space is: {self.env_type}\n'
-
-        if self.env_type == 'discrete':
-            rep += f'Environment number of actions is: {self.action_space_dims}\n'
-
-        elif self.env_type == 'continuous':
-            rep += ''
-            # TODO add here 
-
+        rep += f'Environment number of actions is: {self.action_dim}\n'
         rep += f'Environment reward definition: {available_envs[self.env_name]["reward_info"]}\n'
         rep += '********************\n'
         rep += '********************\n'
@@ -183,258 +405,228 @@ class PPOAgent(object):
         rep += f'Clip ratio: {self.clip_ratio}\n'
         rep += f'Actor model learning rate: {self.actor_lr}\n'
         rep += f'Critic model learning rate: {self.critic_lr}\n'
-        rep += f'Number of iterations for updating Actor model: {self.train_actor_iter}\n'
-        rep += f'Number of iterations for updating Critic model: {self.train_critic_iter}\n'
-        rep += f'Lambda factor: {self.lambda_}\n'
-        rep += f'Target KL value: {self.target_kl}\n'
+        rep += f'Number of episodes/epochs for updating Actor & Critic model: {self.num_update_episodes}\n'
         rep += f'Number of units for hidden layers of Actor/Critic models: {self.hidden_units}\n'
-        rep += f'Buffer size: {self.buffer_size}\n'
+        rep += f'Initial standard deviation for Actor model (used for cont. action spaces): {self.action_std_init}\n'
+        rep += f'Standard deviation for Actor model (used for cont. action spaces): {self.action_std}\n'
         rep += '--------------------------------------------------------------------'
 
         return rep
 
 
-    def create_actor(self, load_model: bool=False) -> None:
+    def set_action_std(self, new_action_std: float) -> None:
 
         """
-            Function for creating Actor model.
+            Function for setting Actors standard deviation
+            for environments with continuous action spaces.
 
             :params:
-                - load_model: indicator for loading Actor model
+                - new_action_std: new Actor standard deviation
 
             :return:
                 - None
         """
-
-        # creating linear FF neural network with only Fully-Connected layers
-        state_input = keras.Input(shape=(self.state_space_dims,), dtype=tf.float32)
-
-        x = state_input
-        for num_units in self.hidden_units:
-            x = layers.Dense(units=num_units, activation=tf.tanh)(x)
-
-        logits_output = layers.Dense(units=self.action_space_dims, activation=None)(x)
         
-        self.actor = keras.Model(inputs=state_input, outputs=logits_output, name='Actor_Model')
+        if self.env_type == 'continuous':
 
-        if load_model and os.path.exists(self.models_path + '\\actor.h5'):
-            self.actor.load_weights(self.models_path + '\\actor.h5')
+            self.action_std = new_action_std
+            self.actor.set_action_std(new_action_std)
+            self.actor_old.set_action_std(new_action_std)
+
+        elif self.env_type == 'discrete':
+            raise RuntimeError('Cannot set new standard deviation for Actor model, since actions are discrete.')
 
 
-    def create_critic(self, load_model: bool=False) -> None:
+    def decay_action_std(self, action_std_decay_rate: float, min_action_std: float) -> None:
 
         """
-            Function for creating Critic model.
+            Function for decaying Actors standard deviation
+            for environments with continuous action spaces.
 
             :params:
-                - load_model: indicator for loading Critic model
+                - action_std_decay_rate: decay rate
+                - min_action_std: minimum std. deviation
 
             :return:
                 - None
         """
 
-        # creating linear FF neural network with only Fully-Connected layers
-        state_input = keras.Input(shape=(self.state_space_dims,), dtype=tf.float32)
+        if self.env_type == 'continuous':
 
-        x = state_input
-        for num_units in self.hidden_units:
-            x = layers.Dense(units=num_units, activation=tf.tanh)(x)
+            self.action_std = self.action_std - action_std_decay_rate
+            self.action_std = round(self.action_std, 4)
             
-        value_output = layers.Dense(units=1, activation=None)(x)
-        value = tf.squeeze(value_output, axis=1)
+            if (self.action_std <= min_action_std):
+                self.action_std = min_action_std
 
-        self.critic = keras.Model(inputs=state_input, outputs=value, name='Critic_Model')
+            self.set_action_std(self.action_std)
 
-        if load_model and os.path.exists(self.models_path + '\\critic.h5'):
-            self.critic.load_weights(self.models_path + '\\critic.h5')
+        elif self.env_type == 'discrete':
+            raise RuntimeError('Cannot decay standard deviation for Actor model, since actions are discrete.')
 
-
-    @tf.function
-    def logprobabilities(self, logits, actions) -> float:
+    
+    def select_action(self, state: np.ndarray) -> np.ndarray or float:
 
         """
-            Function for computing the log-probabilities of taking actions by using the logits - the output of the Actor model.
-
-            :params:
-                - logits: logits from Actor model
-                - actions: actions from buffer
-
-            :return:
-                - logprobability: log probabilities for actions
-        """
-
-        logprobabilities_all = tf.nn.log_softmax(logits)
-        logprobability = tf.reduce_sum(tf.one_hot(actions, self.action_space_dims) * logprobabilities_all, axis=1)
-
-        return logprobability
-
-
-    @tf.function
-    def sample_action(self, state) -> tuple:
-
-        """ 
-            Sample action from Actor model for provided state.
+            Function for selecting action from Actor model.
 
             :params:
                 - state: current state
 
             :return:
-                - logits: log softmax probabilities from actor
-                - action: random sampled actions, sampled regarding the log softmax probabilities from actor (logits)
+                - action: proposed action(s)
         """
 
-        logits = self.actor(state)
-        action = tf.squeeze(tf.random.categorical(logits, 1), axis=1)
+        # feeding Actor network with state
+        if self.env_type == 'continuous':
 
-        return logits, action
+            with torch.no_grad():
+                state = torch.FloatTensor(state).to(device)
+                action, action_logprob = self.actor_old.feed_forward(state)
+
+            self.buffer.states.append(state)
+            self.buffer.actions.append(action)
+            self.buffer.logprobs.append(action_logprob)
+
+            return action.detach().cpu().numpy().flatten()
+
+        elif self.env_type == 'discrete':         
+
+            with torch.no_grad():
+                state = torch.FloatTensor(state).to(device)
+                action, action_logprob = self.actor_old.feed_forward(state)
+            
+            self.buffer.states.append(state)
+            self.buffer.actions.append(action)
+            self.buffer.logprobs.append(action_logprob)
+
+            return action.item()
 
 
-    @tf.function
-    def update_actor(self, normalize: bool=False) -> float:
+    def update_models(self) -> None:
 
-        """ 
-            Function for updating Actor model, acording to buffer values, maxizing the PPO-Clip objective.
-
-            :params:
-                - normalize: inicator for normalizing advantage buffer
-
-            :return:
-                - kl: KL value 
         """
-
-        if normalize:
-            # getting statistics for advantage buffer
-            advantage_mean, advantage_std = np.mean(self.advantage_buffer), np.std(self.advantage_buffer)
-
-            # normalizing advantage_buffer
-            self.advantage_buffer = (self.advantage_buffer - advantage_mean) / advantage_std
-
-        with tf.GradientTape() as tape:
-            ratio = tf.exp(self.logprobabilities(self.actor(self.state_buffer), self.action_buffer) - self.logprobability_buffer)
-
-            min_advantage = tf.where(self.advantage_buffer > 0, (1 + self.clip_ratio) * self.advantage_buffer, (1 - self.clip_ratio) * self.advantage_buffer)
-
-            policy_loss = -tf.reduce_mean(tf.minimum(ratio * self.advantage_buffer, min_advantage))
-
-        policy_grads = tape.gradient(policy_loss, self.actor.trainable_variables)
-        self.actor_optimizer.apply_gradients(zip(policy_grads, self.actor.trainable_variables))
-
-        kl = tf.reduce_mean(self.logprobability_buffer - self.logprobabilities(self.actor(self.state_buffer), self.action_buffer))
-        kl = tf.reduce_sum(kl)
-
-        return kl
-
-
-    @tf.function
-    def update_critic(self):
-
-        """ 
-            Function for updating Critic model, acording to buffer values, by regression on mean-squared error.
+            Function for computing and applying gradients for Actor and Critic models.
 
             :params:
                 - None
 
             :return:
-                - None 
+                - None
         """
 
-        with tf.GradientTape() as tape: 
-            value_loss = tf.reduce_mean((self.return_buffer - self.critic(self.state_buffer)) ** 2)
+        # Monte Carlo estimate of returns
+        rewards = []
+        discounted_reward = 0
+        for reward, is_terminal in zip(reversed(self.buffer.rewards), reversed(self.buffer.is_terminals)):
+            if is_terminal:
+                discounted_reward = 0
+            discounted_reward = reward + (self.gamma * discounted_reward)
+            rewards.insert(0, discounted_reward)
+            
+        # normalizing the rewards
+        rewards = torch.tensor(rewards, dtype=torch.float32).to(device)
+        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-7)
+
+        # convert list to tensor
+        old_states = torch.squeeze(torch.stack(self.buffer.states, dim=0)).detach().to(device)
+        old_actions = torch.squeeze(torch.stack(self.buffer.actions, dim=0)).detach().to(device)
+        old_logprobs = torch.squeeze(torch.stack(self.buffer.logprobs, dim=0)).detach().to(device)
+
+        # Actor & Critic models updating for num_update_episodes
+        for _ in range(self.num_update_episodes):
+
+            # evaluation of old actions and states
+            logprobs, dist_entropy = self.actor.evaluate(old_states, old_actions)
+            state_values = self.critic.evaluate(old_states)
+
+            # match state_values tensor dimensions with rewards tensor
+            state_values = torch.squeeze(state_values)
+            
+            # finding the ratio (pi_theta / pi_theta_old)
+            ratios = torch.exp(logprobs - old_logprobs.detach())
+
+            # finding "Surrogate Loss"
+            advantages = rewards - state_values.detach()   
+            surr1 = ratios * advantages
+            surr2 = torch.clamp(ratios, 1 - self.clip_ratio, 1 + self.clip_ratio) * advantages
+
+            # final loss of clipped objective PPO
+            loss = -torch.min(surr1, surr2) + 0.5*self.MseLoss(state_values, rewards) - 0.01*dist_entropy
+            
+            # take gradient step
+            self.optimizer.zero_grad()
+            loss.mean().backward()
+            self.optimizer.step()
+            
+        # copy new weights into old policy / Actor & Critic models
+        self.actor_old.load_state_dict(self.actor.state_dict())
+        self.critic_old.load_state_dict(self.critic.state_dict())
+
+        # clear buffer
+        self.buffer.clear()
+
+    
+    def save_models(self):
+
+        """
+            Function for saving models.
+
+            :params:
+                - None
+
+            :return:
+                - None
+        """
+
+        torch.save(self.actor_old.state_dict(), self.models_path + 'actor.pth')
+        torch.save(self.critic_old.state_dict(), self.models_path + 'critic.pth')
+
+    def load_models(self):
+
+        """
+            Function for loading Actor & Critic models.
+
+            :params:
+                - None
+
+            :return:
+                - None
+        """
         
-        value_grads = tape.gradient(value_loss, self.critic.trainable_variables)
+        # loading actor models
+        self.actor.load_state_dict(torch.load(self.models_path + 'actor.pth', map_location=lambda storage, loc: storage))
+        self.actor_old.load_state_dict(torch.load(self.models_path + 'actor.pth', map_location=lambda storage, loc: storage))
 
-        self.critic_optimizer.apply_gradients(zip(value_grads, self.critic.trainable_variables))
+        # loading critic models
+        self.critic.load_state_dict(torch.load(self.models_path + 'critic.pth', map_location=lambda storage, loc: storage))
+        self.critic_old.load_state_dict(torch.load(self.models_path + 'critic.pth', map_location=lambda storage, loc: storage))
+        
 
-
-    def store(self, state, action, reward, value, logprobability) -> None:
-
-        """ 
-            Function for storing one agent-environment interaction data in buffer.
-
-            :params:
-                - state: current agent's state
-                - action: sampled action in state
-                - reward: env reward for that state
-                - value: value from value function (Critic model) for action
-                - logprobability: log probability for action
-
-            :return:
-                - None
-        """
-
-        # storing one agent-env interaction
-        self.state_buffer[self.buffer_counter] = state
-        self.action_buffer[self.buffer_counter] = action
-        self.reward_buffer[self.buffer_counter] = reward
-        self.value_buffer[self.buffer_counter] = value
-        self.logprobability_buffer[self.buffer_counter] = logprobability
-
-        # incrementing memory counter
-        self.buffer_counter += 1
-
-
-    def discounted_cumulative_sums(self, x: np.ndarray, discount: float) -> float:
-
-        """ 
-            Function for computing discounted cumulative sums over provided vector and provided discount factor.
-
-            :params:
-                - x: provide vector
-                - discount: discount factor
-
-            :return:
-                - calculated sums
-
-        """
-
-        return scipy.signal.lfilter([1], [1, float(-discount)], x[::-1], axis=0)[::-1]
-
-
-    def finish_trajectory(self, last_value: float=0.0) -> None:
-
-        """ 
-            Function for finishing trajectories in terminal state or when max iteration
-            exceeded, by computing advantage estimates and rewards-to-go, using current buffers.
-
-            :params:
-                - last_value: last value from training
-
-            :return:
-                - None
-
-        """
-
-        path_slice = slice(self.trajectory_start_index, self.buffer_counter)
-        rewards = np.append(self.reward_buffer[path_slice], last_value)
-        values = np.append(self.value_buffer[path_slice], last_value)
-
-        deltas = rewards[:-1] + self.gamma * values[1:] - values[:-1]
-
-        self.advantage_buffer[path_slice] = self.discounted_cumulative_sums(deltas, self.gamma * self.lambda_)
-        self.return_buffer[path_slice] = self.discounted_cumulative_sums(rewards, self.gamma)[:-1]
-
-        self.trajectory_start_index = self.buffer_counter
-
-
-    def train(self, render: bool=False) -> None:
+    def train(self, update_timestep: int=4000, decay_std_timestep: int=int(2e6), action_std_decay_rate: float=0.05, min_action_std: float=0.1) -> None:
 
         """
             Function for training agent over epsodes, storing interactions and updating Actor and Critic models.
 
             :params:
-                - render: indicator for rendering OpenAI Gym Environment
+                - update_timestep: number of iterations after which update of models is executed
+                - decay_std_timestep: number of iterations after which std. deviation of Actor model decay is executed
+                - action_std_decay_rate: float number for decay rate 
+                - min_action_std: minimum Actor action std. deviation
 
             :return:
-                - None:
+                - None
         """
 
         self.train_episodic_rewards, self.train_episodic_lengths = [], []
 
-        print('--------------------------------------------------------------------')
+        print(f'---------------- ENVIRONMENT: {self.env_name} ---------------------')
         print('-------------------------- TRAINING --------------------------------')
 
+        time_step = 0
+
         # iterating over episodes
-        for episode in range(self.num_episodes):
+        for episode in range(1, self.num_episodes+1):
 
             # reseting environment on the start of episode
             state = self.env.reset()
@@ -443,80 +635,51 @@ class PPOAgent(object):
             episode_reward, episode_length = 0, 0
 
             # iterating over the steps for each episode
-            for t in range(self.max_iter):
+            for t in range(1, self.max_iter+1):
 
-                print(f'Executing Episode {episode+1}/{self.num_episodes} ---> Executing Iteration {t+1}', end='\r')
+                print(f'Executing Episode {episode}/{self.num_episodes} ---> Executing Iteration {t}', end='\r')
 
-                # rendering OpenAI Gym Environment
-                if render:
-                    self.env.render()
-
-                # getting logits and action 
-                state = state.reshape(1, -1)
-                logits, action = self.sample_action(state)
+                # getting action 
+                action = self.select_action(state)
 
                 # taking step in environment and getting reward and new state
-                new_state, reward, done, _ = self.env.step(action[0].numpy())
+                state, reward, done, _ = self.env.step(action)
+
+                # saving reward and is_terminals
+                self.buffer.rewards.append(reward)
+                self.buffer.is_terminals.append(done)
 
                 episode_reward += reward
                 episode_length += 1
+                time_step += 1
 
-                # get the value and log-probability of the action
-                value_t = self.critic(state)
-                logprobability_t = self.logprobabilities(logits, action)
+                if time_step % update_timestep == 0:
+                    self.update_models()
 
-                # storing in buffer tuple: current_state, action, rewrd, value, log_probability
-                self.store(state, action, reward, value_t, logprobability_t)
+                if self.env_type == 'continuous' and time_step % decay_std_timestep == 0:
+                    self.decay_action_std(action_std_decay_rate, min_action_std)
 
-                # state transition
-                state = new_state
-
-                # finish trajectory if reached to a terminal state
-                if done or (t == self.max_iter - 1):
-                    last_value = 0 if done else self.critic(state.reshape(1, -1))
-                    self.finish_trajectory(last_value)
+                if done:
                     break
-
+            
+            # storing episodic rewards and lenghts
             self.train_episodic_rewards.append(episode_reward)
             self.train_episodic_lengths.append(episode_length)
 
-            # reseting buffer indices
-            self.buffer_counter, self.trajectory_start_index = 0, 0
-
-            # training Actor model
-            for i in range(self.train_actor_iter):
-
-                normalize = False
-                if i == 0:
-                    normalize = True
-
-                # iterative Actor model updating
-                kl = self.update_actor(normalize)
-
-                # early stopping if KL value is diverging (1.5 is expermintal value)
-                if kl > 1.5 * self.target_kl:
-                    break
-
-            # training Critic model
-            for _ in range(self.train_critic_iter):
-
-                # iterative Critic model updating
-                self.update_critic()
-
             # print episodic reward and episode duration
-            self.train_text += f'Episode: {episode + 1}/{self.num_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}\n'
+            self.train_text += f'Episode: {episode}/{self.num_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}\n'
 
-        # saving model weigths
-        self.actor.save(self.models_path + '\\actor.h5')
-        self.critic.save(self.models_path + '\\critic.h5')
+        # saving models
+        self.save_models()
 
+        # closing environment
         self.env.close()
 
         # visulazing results
         self.visualize()
 
 
-    def evaluate(self, render: bool=False) -> None:
+    def evaluate(self, render: bool=True) -> None:
 
         """
             Function for evaluating agent.
@@ -533,8 +696,10 @@ class PPOAgent(object):
         print('--------------------------------------------------------------------')
         print('-------------------------- EVALUATION ------------------------------')
 
+        time_step = 0
+
         # iterating over episodes
-        for episode in range(self.eval_episodes):
+        for episode in range(1, self.eval_episodes + 1):
 
             # reseting environment on the start of episode
             state = self.env.reset()
@@ -543,41 +708,47 @@ class PPOAgent(object):
             episode_reward, episode_length = 0, 0
 
             # iterating over the steps for each episode
-            for t in range(self.max_iter):
+            for t in range(1, self.max_iter + 1):
 
-                print(f'Executing Episode {episode+1}/{self.num_episodes} ---> Executing Iteration {t+1}', end='\r')
+                print(f'Executing Episode {episode}/{self.eval_episodes} ---> Executing Iteration {t}', end='\r')
 
                 # rendering OpenAI Gym Environment
                 if render:
-                    self.env.render()
+                    img = self.env.render(mode = 'rgb_array')
+                    img = Image.fromarray(img)
+                    img.save(self.gif_images_path + str(t).zfill(6) + '.jpg')
 
-                # getting logits and action 
-                state = state.reshape(1, -1)
-                _, action = self.sample_action(state)
+                # getting action 
+                action = self.select_action(state)
 
                 # taking step in environment and getting reward and new state
-                new_state, reward, done, _ = self.env.step(action[0].numpy())
+                state, reward, done, _ = self.env.step(action)
 
                 episode_reward += reward
                 episode_length += 1
+                time_step += 1
 
-                # state transition
-                state = new_state
-
-                # finish trajectory if reached to a terminal state
                 if done:
                     break
 
+            # clearing buffer
+            self.buffer.clear()
+
+            # storing episodic rewards
             self.eval_episodic_rewards.append(episode_reward)
             self.eval_episodic_lengths.append(episode_length)
 
             # print episodic reward and episode duration
-            self.eval_text += f'Episode: {episode + 1}/{self.eval_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}\n'
+            self.eval_text += f'Episode: {episode}/{self.eval_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}\n'
 
+        # closing environment
         self.env.close()
 
         # visulazing results
         self.visualize(train=False)
+
+        # making gif
+        self.make_gif()
 
     
     def visualize(self, train: bool=True) -> None:
@@ -599,13 +770,13 @@ class PPOAgent(object):
             ax[0].plot(np.arange(1, len(self.train_episodic_rewards)+1), self.train_episodic_rewards)
             ax[1].plot(np.arange(1, len(self.train_episodic_lengths)+1), self.train_episodic_lengths)
             plt.suptitle('TRAINING PROCESS')
-            filename = r'\\training.png'
+            filename = 'training.png'
 
         else:
             ax[0].plot(np.arange(1, len(self.eval_episodic_rewards)+1), self.eval_episodic_rewards)
             ax[1].plot(np.arange(1, len(self.eval_episodic_lengths)+1), self.eval_episodic_lengths)
             plt.suptitle('EVALUATION PROCESS')
-            filename = r'\\evaluation.png'
+            filename = 'evaluation.png'
         
         ax[0].set_title('Total episodic reward')
         ax[0].set_xlabel('#No. Episode')
@@ -618,12 +789,35 @@ class PPOAgent(object):
         ax[1].grid()
 
         plt.tight_layout()
-        plt.show()
+        # plt.show()
 
-        fig.savefig(self.results_path + filename, facecolor = 'white', bbox_inches='tight')
+        fig.savefig(self.plots_path + filename, facecolor = 'white', bbox_inches='tight')
 
 
-    def dump_agent_info(self) -> None:
+    def make_gif(self, total_timesteps: int=400, step: int=10, frame_duration: int=200) -> None:
+
+        """
+            Function for gif image from stored evaluation images.
+
+            :params:
+                - total_timesteps: number of total iterations
+                - step: number of iterations to skip
+                - frame_duration:  number of iterations for one frame
+
+            :return:
+                - None
+        """
+
+        img_paths = sorted(glob.glob(self.gif_images_path + r'\\*.jpg'))
+        img_paths = img_paths[:total_timesteps]
+        img_paths = img_paths[::step]
+
+        # saving gif image
+        img, *imgs = [Image.open(f) for f in img_paths]
+        img.save(fp=self.gif_path + 'result.gif', format='GIF', append_images=imgs, save_all=True, optimize=True, duration=frame_duration, loop=0)
+
+
+    def dump_log(self) -> None:
 
         """
             Function for dumping agent's info into txt file.
@@ -635,12 +829,8 @@ class PPOAgent(object):
                 - None
         """
 
-        with open(self.env_name + '\\info.txt', 'w') as f:
+        with open(self.log_path + 'log.txt', 'w') as f:
             f.write(self.__repr__())
-            f.write('\n--------------------------------------------------------------------\n')
-            self.actor.summary(print_fn=lambda x: f.write(x + '\n'))
-            f.write('\n--------------------------------------------------------------------\n')
-            self.critic.summary(print_fn=lambda x: f.write(x + '\n'))
             f.write('\n--------------------------------------------------------------------\n')
             f.write('-------------------------- TRAINING --------------------------------\n')
             f.write(self.train_text)
