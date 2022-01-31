@@ -16,7 +16,6 @@ parser.add_argument('--actor_lr', type=float)
 parser.add_argument('--critic_lr', type=float)
 parser.add_argument('--num_update_episodes', type=int)
 parser.add_argument('--action_std_init', type=float)
-parser.add_argument('--hidden_units', type=tuple)
 
 # main part of program
 if __name__ == "__main__":
@@ -36,7 +35,7 @@ if __name__ == "__main__":
                             env_name, 
                             num_episodes = envs_dict[env_name]['num_episodes'],
                             max_iter = envs_dict[env_name]['max_iter'],
-                            num_update_episodes = envs_dict[env_name]['num_update_episodes'], load_model=True)
+                            num_update_episodes = envs_dict[env_name]['num_update_episodes'])
 
         # training agent
         ppo_agent.train(update_timestep = envs_dict[env_name]['update_timestep'])

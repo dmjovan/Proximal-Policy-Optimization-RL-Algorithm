@@ -1,19 +1,16 @@
 import os
 import gym
-import glob
 import torch
 import shutil
 import numpy as np
 import torch.nn as nn
 import matplotlib.pyplot as plt
 
-from PIL import Image
 from torch.distributions import Categorical
 from torch.distributions import MultivariateNormal
 
 available_envs = {
-                  'CartPole-v1': {'type': 'discrete', 'reward_info': 'Reward is 1 for every step taken, including the termination step'},
-                  'MountainCar-v0': {'type': 'discrete', 'reward_info': 'Reward is -1.0 if not terminal state, 0.0 if agent has reached the flag'},
+                  'CartPole-v0': {'type': 'discrete', 'reward_info': 'Reward is 1 for every step taken, including the termination step'},
                   'Acrobot-v1': {'type': 'discrete', 'reward_info': 'Reward is -1.0 if not terminal state, 0.0 if terminal'},
                   'MountainCarContinuous-v0': {'type': 'continuous', 'reward_info': 'Reward is 100 if agent reached the flag, reward is decreased based on amount of energy consumed each step'},
                   'Pendulum-v1': {'type': 'continuous', 'reward_info': 'None'}
@@ -246,7 +243,6 @@ class PPOAgent:
                  critic_lr: float=0.001,
                  num_update_episodes: int=80,
                  action_std_init: float=0.6,
-                 hidden_units: tuple=(64,64),
                  load_model: bool=False,
                  random_seed: int=0) -> None:
 
@@ -268,7 +264,6 @@ class PPOAgent:
                 - critic_lr: Critic model learning rate
                 - num_update_episodes: nnumber of episodes/epochs for updating Actor and Critic models
                 - action_std_init: standard deviation for Actor model
-                - hidden_units: tuple containing all number of units/neurons for each layer
                 - load_model: indicator for loading models if exist
                 - random_seed: random seed number
 
@@ -287,7 +282,6 @@ class PPOAgent:
         self.critic_lr = critic_lr if args.critic_lr is None else args.critic_lr
         self.num_update_episodes = num_update_episodes if args.num_update_episodes is None else args.num_update_episodes
         self.action_std_init = action_std_init if args.action_std_init is None else args.action_std_init
-        self.hidden_units = hidden_units if args.hidden_units is None else args.hidden_units
 
         # check if env_name is supported
         assert self.env_name in available_envs.keys(), 'Environment is not supported!'
@@ -309,8 +303,7 @@ class PPOAgent:
         # creating paths and folders for storing results
         self.models_path = self.env_name + '\\models\\'
         self.plots_path = self.env_name + '\\plots\\'
-        self.gif_images_path = self.env_name + '\\gif_images\\'
-        self.gif_path  = self.env_name + '\\gif\\'
+        self.videos_path = self.env_name + '\\videos\\'
         self.log_path = self.env_name + '\\log\\'
 
         if os.path.exists(self.env_name) and not load_model:
@@ -322,12 +315,9 @@ class PPOAgent:
         if not os.path.exists(self.plots_path):
             os.makedirs(self.plots_path)
 
-        if not os.path.exists(self.gif_images_path):
-            os.makedirs(self.gif_images_path)
+        if not os.path.exists(self.videos_path):
+            os.makedirs(self.videos_path)
         
-        if not os.path.exists(self.gif_path):
-            os.makedirs(self.gif_path)
-          
         if not os.path.exists(self.log_path):  
             os.makedirs(self.log_path)
     
@@ -367,9 +357,9 @@ class PPOAgent:
 
         # initialization of training and evaluation records
         self.train_episodic_rewards = []
-        self.train_episodic_lengths = []
+        self.train_average_episodic_rewards = []
         self.eval_episodic_rewards = []
-        self.eval_episodic_lengths = []
+        self.eval_average_episodic_rewards = []
 
         # initialization of train and eval texts
         self.train_text = ''
@@ -406,7 +396,7 @@ class PPOAgent:
         rep += f'Actor model learning rate: {self.actor_lr}\n'
         rep += f'Critic model learning rate: {self.critic_lr}\n'
         rep += f'Number of episodes/epochs for updating Actor & Critic model: {self.num_update_episodes}\n'
-        rep += f'Number of units for hidden layers of Actor/Critic models: {self.hidden_units}\n'
+        rep += f'Number of units for hidden layers of Actor/Critic models: {(64, 64)}\n'
         rep += f'Initial standard deviation for Actor model (used for cont. action spaces): {self.action_std_init}\n'
         rep += f'Standard deviation for Actor model (used for cont. action spaces): {self.action_std}\n'
         rep += '--------------------------------------------------------------------'
@@ -618,7 +608,7 @@ class PPOAgent:
                 - None
         """
 
-        self.train_episodic_rewards, self.train_episodic_lengths = [], []
+        self.train_episodic_rewards, self.train_average_episodic_rewards = [], []
 
         print(f'---------------- ENVIRONMENT: {self.env_name} ---------------------')
         print('-------------------------- TRAINING --------------------------------')
@@ -662,9 +652,9 @@ class PPOAgent:
                 if done:
                     break
             
-            # storing episodic rewards and lenghts
+            # storing episodic rewards
             self.train_episodic_rewards.append(episode_reward)
-            self.train_episodic_lengths.append(episode_length)
+            self.train_average_episodic_rewards.append(np.mean(self.train_episodic_rewards[-10:]))
 
             # print episodic reward and episode duration
             self.train_text += f'Episode: {episode}/{self.num_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}\n'
@@ -691,7 +681,10 @@ class PPOAgent:
                 - None:
         """
 
-        self.eval_episodic_rewards, self.eval_episodic_lengths = [], []
+        # monitoring Gym enivorment for collecting videos
+        self.env = gym.wrappers.Monitor(self.env, self.videos_path, force=True)
+
+        self.eval_episodic_rewards, self.eval_average_episodic_rewards = [], []
 
         print('--------------------------------------------------------------------')
         print('-------------------------- EVALUATION ------------------------------')
@@ -714,9 +707,7 @@ class PPOAgent:
 
                 # rendering OpenAI Gym Environment
                 if render:
-                    img = self.env.render(mode = 'rgb_array')
-                    img = Image.fromarray(img)
-                    img.save(self.gif_images_path + str(t).zfill(6) + '.jpg')
+                    self.env.render()
 
                 # getting action 
                 action = self.select_action(state)
@@ -736,7 +727,7 @@ class PPOAgent:
 
             # storing episodic rewards
             self.eval_episodic_rewards.append(episode_reward)
-            self.eval_episodic_lengths.append(episode_length)
+            self.eval_average_episodic_rewards.append(np.mean(self.eval_episodic_rewards[-10:]))
 
             # print episodic reward and episode duration
             self.eval_text += f'Episode: {episode}/{self.eval_episodes} --> Episodic Reward: {episode_reward} || Episode Duration [in iterations]: {episode_length}/{self.max_iter}\n'
@@ -747,8 +738,8 @@ class PPOAgent:
         # visulazing results
         self.visualize(train=False)
 
-        # making gif
-        self.make_gif()
+        # post processing data
+        self.post_process_monitor()
 
     
     def visualize(self, train: bool=True) -> None:
@@ -763,58 +754,57 @@ class PPOAgent:
                 - None
         """
 
-        fig, axes = plt.subplots(ncols=2, figsize=(28,14))
-        ax = axes.ravel()
+        fig = plt.figure(figsize=(20,16))
 
         if train:
-            ax[0].plot(np.arange(1, len(self.train_episodic_rewards)+1), self.train_episodic_rewards)
-            ax[1].plot(np.arange(1, len(self.train_episodic_lengths)+1), self.train_episodic_lengths)
-            plt.suptitle('TRAINING PROCESS')
+            plt.plot(np.arange(1, len(self.train_episodic_rewards)+1), self.train_episodic_rewards, color='mistyrose', linewidth=2, label='episodic')
+            plt.plot(np.arange(1, len(self.train_average_episodic_rewards)+1), self.train_average_episodic_rewards, color='red', linewidth=2, label='average episodic')
+            plt.title('Training - Total episodic rewards')
             filename = 'training.png'
 
         else:
-            ax[0].plot(np.arange(1, len(self.eval_episodic_rewards)+1), self.eval_episodic_rewards)
-            ax[1].plot(np.arange(1, len(self.eval_episodic_lengths)+1), self.eval_episodic_lengths)
-            plt.suptitle('EVALUATION PROCESS')
+            plt.plot(np.arange(1, len(self.eval_episodic_rewards)+1), self.eval_episodic_rewards, color='azure', linewidth=2, label='episodic')
+            plt.plot(np.arange(1, len(self.eval_average_episodic_rewards)+1), self.eval_average_episodic_rewards, color='dodgerblue', linewidth=2, label='average episodic')
+            plt.title('Evaluation - Total episodic rewards')
             filename = 'evaluation.png'
         
-        ax[0].set_title('Total episodic reward')
-        ax[0].set_xlabel('#No. Episode')
-        ax[0].set_ylabel('Total reward')
-        ax[0].grid()
-        
-        ax[1].set_title('Episode duration')
-        ax[1].set_xlabel('#No. Episode')
-        ax[1].set_ylabel('Duration [in iterations]')
-        ax[1].grid()
-
+        plt.xlabel('#No. Episode')
+        plt.ylabel('Total reward')
+        plt.legend(loc='upper left')
+        plt.grid()
         plt.tight_layout()
-        # plt.show()
 
         fig.savefig(self.plots_path + filename, facecolor = 'white', bbox_inches='tight')
 
 
-    def make_gif(self, total_timesteps: int=400, step: int=10, frame_duration: int=200) -> None:
+    def post_process_monitor(self):
 
         """
-            Function for gif image from stored evaluation images.
+            Function for post processing of monitored files.
 
             :params:
-                - total_timesteps: number of total iterations
-                - step: number of iterations to skip
-                - frame_duration:  number of iterations for one frame
+                - None
 
             :return:
                 - None
         """
+        
+        # removing json files from monitor
+        files = os.listdir(self.videos_path)
+        json_files = [file for file in files if file.endswith('.json')]
 
-        img_paths = sorted(glob.glob(self.gif_images_path + r'\\*.jpg'))
-        img_paths = img_paths[:total_timesteps]
-        img_paths = img_paths[::step]
+        for json_file in json_files:
+            path = self.videos_path + json_file
+            os.remove(path)
 
-        # saving gif image
-        img, *imgs = [Image.open(f) for f in img_paths]
-        img.save(fp=self.gif_path + 'result.gif', format='GIF', append_images=imgs, save_all=True, optimize=True, duration=frame_duration, loop=0)
+        # renaming video files
+        videos = set(files) - set(json_files)
+
+        i = 1
+        for video in sorted(videos, key=lambda x: int(x[-10:-4])):
+            new_video = f'video{i}.mp4'
+            os.rename(self.videos_path + video, self.videos_path + new_video)
+            i += 1
 
 
     def dump_log(self) -> None:
