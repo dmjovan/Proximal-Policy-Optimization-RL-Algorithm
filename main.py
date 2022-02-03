@@ -1,4 +1,5 @@
 import json
+import sys
 import argparse
 from ppo import PPOAgent
 import warnings
@@ -32,10 +33,10 @@ if __name__ == "__main__":
 
         # creating agent for Proximal Policy Optimization algorithm
         ppo_agent = PPOAgent(args, 
-                            env_name, 
-                            num_episodes = envs_dict[env_name]['num_episodes'],
-                            max_iter = envs_dict[env_name]['max_iter'],
-                            num_update_episodes = envs_dict[env_name]['num_update_episodes'])
+                             env_name = env_name,
+                             num_episodes = envs_dict[env_name]['num_episodes'],
+                             max_iter = envs_dict[env_name]['max_iter'],
+                             num_update_episodes = envs_dict[env_name]['num_update_episodes'])
 
         # training agent
         ppo_agent.train(update_timestep = envs_dict[env_name]['update_timestep'])
@@ -46,5 +47,9 @@ if __name__ == "__main__":
         # dumping all informations
         ppo_agent.dump_log()
 
-        # # deleting agent
+        # deleting agent
         del ppo_agent
+
+        # breaking loop because arguments are passed 
+        if len(sys.argv) > 1:
+            break
