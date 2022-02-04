@@ -21,5 +21,6 @@ _--env_name CartPole-v1 \
 
 **Results**
 
-|Acrobot-v1|CartPole-v0|MountainCarContinuous-v0|Pendulum-v1|
-|xxxxxxxx|yyyyyyyyyy|aaaaaaaaa|aaaaaaaaaaaaaaaavvvvvv|
+| Acrobot-v1 | CartPole-v0 | MountainCarContinuous-v0 | Pendulum-v1 |
+|------------|:-----------:|:------------------------:|------------:|
+|![alt text](file:///C:/Users/Jovan%20Dmitrovic/Python%20Scripts/Proximal-Policy-Optimization-RL-Algorithm/Acrobot-v1/Acrobot-v1.gif)|![alt text](file:///C:/Users/Jovan%20Dmitrovic/Python%20Scripts/Proximal-Policy-Optimization-RL-Algorithm/CartPole-v0/CartPole-v0.gif)|![alt text](file:///C:/Users/Jovan%20Dmitrovic/Python%20Scripts/Proximal-Policy-Optimization-RL-Algorithm/MountainCarContinuous-v0/MountainCarContinuous-v0.gif)|![alt text](file:///C:/Users/Jovan%20Dmitrovic/Python%20Scripts/Proximal-Policy-Optimization-RL-Algorithm/Pendulum-v1/Pendulum-v1.gif)|
