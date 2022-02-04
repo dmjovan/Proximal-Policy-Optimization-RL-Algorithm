@@ -18,3 +18,8 @@ _--env_name CartPole-v1 \
 --critic_lr 0.001 \
 --num_update_episodes 80 \
 --action_std_init 0.1_ 
+
+**Results**
+
+|Acrobot-v1|CartPole-v0|MountainCarContinuous-v0|Pendulum-v1|
+|xxxxxxxx|yyyyyyyyyy|aaaaaaaaa|aaaaaaaaaaaaaaaavvvvvv|
